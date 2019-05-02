@@ -1,0 +1,240 @@
+#cloud-config
+# vim: syntax=yaml
+#
+
+# TODO:
+# start up and enable sshd sudo systemctl start sshd
+# sudo apt-get install xdotool unclutter sed
+
+
+
+# The current version of cloud-init in the Hypriot rpi-64 is 0.7.9
+# When dealing with cloud-init, it is SUPER important to know the version
+# I have wasted many hours creating servers to find out the module I was trying to use wasn't in the cloud-init version I had
+# Documentation: http://cloudinit.readthedocs.io/en/0.7.9/index.html
+
+# Set your hostname here, the manage_etc_hosts will update the hosts file entries as well
+hostname: piclock
+manage_etc_hosts: true
+
+# You could modify this for your own user information
+users:
+  - name: pi
+    gecos: "Pirate User"
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: users,docker,video
+    plain_text_passwd: raspberry
+    lock_passwd: false
+    ssh_pwauth: true
+    chpasswd: { expire: false }
+
+# # Set the locale of the system
+locale: "en_US.UTF-8"
+
+# # Set the timezone
+# # Value of 'timezone' must exist in /usr/share/zoneinfo
+timezone: "America/New_York"
+# timezone: "Europe/Lisbon"
+
+# # Update apt packages on first boot
+package_update: true
+package_upgrade: true
+package_reboot_if_required: true
+
+# # Install any additional apt packages you need here
+packages:
+ - ntp 
+ - tmux
+ - glances
+ - vim 
+ - matchbox-window-manager 
+ - unclutter 
+ - mailutils 
+ - nitrogen 
+ - jq 
+ - chromium-browser 
+ - xserver-xorg 
+ - xinit 
+ - xdotool
+
+#  - xserver-xorg 
+#  - xinit 
+#  - xserver-xorg-video-fbdev 
+#  - lxde 
+#  - lxde-common 
+#  - lightdm 
+#  - x11-xserver-utils
+#  - policykit-1 
+#  - hal
+#  - chromium-browser 
+#  - chromium-codecs
+
+
+
+#  sudo apt install -y chromium-browser xserver-xorg-core xserver-xorg-video-fbdev x11-xserver-utils libgl1-mesa-dri matchbox-window-manager xautomation feh xauth libraspberrypi0 libraspberrypi-dev libraspberrypi-doc libraspberrypi-bin xinit
+# #  - chromium-browser
+# #  - lightdm
+# #  - lxde-core 
+# #  - lxterminal 
+# #  - lxappearance
+# #  - xinit
+# #  - xserver-xorg
+#  - chromium-browser
+#  - xserver-xorg-core
+#  - xserver-xorg-video-fbdev
+#  - x11-xserver-utils
+#  - libgl1-mesa-dri
+#  - matchbox-window-manager
+#  - xautomation
+#  - feh
+#  - xauth
+#  - libraspberrypi0 
+#  - libraspberrypi-dev 
+#  - libraspberrypi-doc 
+#  - libraspberrypi-bin
+#  - xinit
+
+
+# # WiFi connect to HotSpot
+# To make wifi work with RPi3 and RPi0
+# you also have to set "enable_uart=0" in config.txt
+# See no-uart-config.txt for an example.
+#
+# # - use `wpa_passphrase SSID PASSWORD` to encrypt the psk
+write_files:
+  - content: |
+      docker stop piclock-server
+      docker container rm piclock-server
+      docker pull 192.168.13.10:5000/piclock-server
+      docker create --restart=unless-stopped --name piclock-server -p 5000:5000 192.168.13.10:5000/piclock-server
+      docker start piclock-server
+      docker logs -f piclock-server
+    path: /home/pi/run.sh
+  - content: |
+      {"insecure-registries" : ["192.168.13.10:5000"]}
+    path: /etc/docker/daemon.json
+  - content: |
+      #!/bin/bash
+      if [ "$(tty)" == "/dev/tty1" ]; then
+        exec startx >/dev/null 2>&1
+      fi
+      if [ "$(tty)" == "/dev/tty2" ]; then
+        sudo raspi-config
+      fi
+    path: /home/pi/.bash_profile
+  - content: |
+      #!/bin/bash
+      export DISPLAY=:0.0
+      xdotool mousemove 0 0
+      xset s off # don't activate screensaver
+      xset -dpms # disable DPMS (Energy Star) features.
+      xset s noblank # don't blank the video device
+      unclutter -idle 0 -root &
+      if [ -f .config/chromium/Default/Preferences ]; then
+          cat .config/chromium/Default/Preferences \
+              | jq '.profile.exit_type = "SessionEnded" | .profile.exited_cleanly = true' \
+              > .config/chromium/Default/Preferences-clean
+          mv .config/chromium/Default/Preferences{-clean,}
+      fi
+      find .config/chromium/ -name "Last *" | xargs rm
+      chromium-browser --incognito --kiosk --window-size=800,480 --start-fullscreen --disable-extensions  --no-first-run "http://localhost:5000"
+      wid=`xdotool search --sync --onlyvisible --class chromium`
+      xdotool windowunmap $wid
+      sleep 15 # give the web page time to load
+      xdotool windowmap $wid
+      exec matchbox-window-manager -use_titlebar no
+    path: /home/pi/.xsession
+  - content: |
+      [Unit]
+      Description=Getty on %I
+      Documentation=man:agetty(8) man:systemd-getty-generator(8)
+      Documentation=http://0pointer.de/blog/projects/serial-console.html
+      After=systemd-user-sessions.service plymouth-quit-wait.service
+      After=rc-local.service
+      Before=getty.target
+      IgnoreOnIsolate=yes
+      ConditionPathExists=/dev/tty0
+      [Service]
+      ExecStart=-/sbin/agetty --autologin pi --noclear %I $TERM
+      Type=idle
+      Restart=always
+      RestartSec=0
+      UtmpIdentifier=%I
+      TTYPath=/dev/%I
+      TTYReset=yes
+      TTYVHangup=yes
+      TTYVTDisallocate=yes
+      KillMode=process
+      IgnoreSIGPIPE=no
+      SendSIGHUP=yes
+      Environment=LANG= LANGUAGE= LC_CTYPE= LC_NUMERIC= LC_TIME= LC_COLLATE= LC_MONETARY= LC_MESSAGES= LC_PAPER= LC_NAME= LC_ADDRESS= LC_TELEPHONE= LC_MEASUREMENT= LC_IDENTIFICATION=
+      [Install]
+      WantedBy=getty.target
+      DefaultInstance=tty1
+    path: /etc/systemd/system/autologin@.service
+  - content: |
+      allow-hotplug wlan0
+      iface wlan0 inet dhcp
+      wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
+      iface default inet dhcp
+    path: /etc/network/interfaces.d/wlan0
+  - content: |
+      country=US
+      ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+      update_config=1
+      network={
+      ssid="TK-INTERNET"
+      psk="jackiemiguel"
+      proto=RSN
+      key_mgmt=WPA-PSK
+      pairwise=CCMP
+      auth_alg=OPEN
+      }
+    path: /etc/wpa_supplicant/wpa_supplicant.conf
+
+# These commands will be ran once on first boot only
+runcmd:
+  - 'chown -R pi.pi /home/pi'
+  - 'systemctl enable docker'
+  - 'systemctl set-default multi-user.target'
+  # Pickup the hostname changes
+  - 'systemctl restart avahi-daemon'
+
+  # Activate WiFi interface
+  - 'ifup wlan0'
+
+  # Add docker container
+  - 'docker pull 192.168.13.10:5000/piclock-server'
+  - 'docker create --restart=unless-stopped --name piclock-server -p 5000:5000 192.168.13.10:5000/piclock-server'
+
+  # set display brightness
+  - 'echo 128 > /sys/class/backlight/rpi_backlight/brightness'
+
+  - 'apt autoremove -y'
+  # Install docker package for kiosk
+  # - 'docker pull piclock:latest 192.168.13.10'
+  
+  # Install X and Chrome
+  # - 'curl -sSL https://github.com/hypriot/x11-on-HypriotOS/raw/master/install-x11-basics.sh | bash'
+  # - 'curl -sSL https://github.com/hypriot/x11-on-HypriotOS/raw/master/install-chromium-browser.sh | bash'
+
+  # set up kiosk
+  # - 'cd /home/pi'
+  # - 'git clone https://github.com/CODESIGN2/rpi-pixel-kiosk'
+  # - 'cd rpi-pixel-kiosk'
+  # - 'bash install.sh http://www.google.com'
+  # - 'docker create -v /dev/tty0:/dev/tty0 -v /etc/localtime:/etc/localtime --name rpi-kiosk --restart unless-stopped -e URL=http://192.168.13.117:5000 --privileged thomaskatalis/rpi-kiosk'
+  # - 'docker start rpi-kiosk'
+  # - 'systemctl enable docker'
+
+
+power_state:
+ delay: "now"
+ mode: reboot
+ message: All finished, now rebooting.
+ timeout: 30
+ condition: True
+
+
+#  Created symlink /etc/systemd/system/default.target → /lib/systemd/system/graphical.target.
